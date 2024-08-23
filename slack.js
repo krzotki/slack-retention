@@ -30,9 +30,10 @@ function getUnixTimestamp(year, month, day) {
 // Extract relevant content from the message
 function extractContent(message) {
   let textContent = message.text || "";
-
-  // Extract links and additional text content from blocks
   const links = [];
+  const attachments = message.attachments || [];
+
+  // Extract links and additional text content from blocks, avoiding duplication
   if (message.blocks) {
     message.blocks.forEach((block) => {
       if (block.type === "rich_text") {
@@ -40,7 +41,10 @@ function extractContent(message) {
           if (element.type === "rich_text_section") {
             element.elements.forEach((subElement) => {
               if (subElement.type === "text" && subElement.text !== textContent) {
-                textContent += subElement.text;
+                // Only add subElement.text if it's not already in textContent
+                if (!textContent.includes(subElement.text)) {
+                  textContent += subElement.text;
+                }
               } else if (subElement.type === "link") {
                 links.push(subElement.url);
               }
@@ -51,11 +55,10 @@ function extractContent(message) {
     });
   }
 
-  // Structure the content to include date, text, links, and attachments
   return {
     text: textContent.trim(),
     links: links,
-    attachments: message.attachments || [],
+    attachments: attachments,
     date: new Date(parseFloat(message.ts) * 1000).toISOString(),
     thread: [],
   };
@@ -116,16 +119,17 @@ async function isMessageAboutProblem(message) {
       messages: [
         {
           role: "system",
-          content: `You are a helpful assistant that identifies whether a message is about a problem or issue.
+          content: `You are a helpful assistant that identifies whether a message is about a problem, issue or a question for guidance.
             If the message is a pull request review request, then it is not a problem or issue.
             `,
         },
         {
           role: "user",
-          content: `Is the following message about a problem or issue?\n\n"${message}"`,
+          content: `Is the following message about a problem, issue or a question for guidance?\n\n"${message}"`,
         },
       ],
       response_format: zodResponseFormat(GPTResponse, "response"),
+      temperature: 0,
     });
 
     const isProblem = completion.choices[0].message.parsed.isProblem;
