@@ -20,7 +20,7 @@ const openai = new OpenAI({
   apiKey: openaiApiKey,
 });
 
-const problemMessages = [];
+const filePath = "problemMessages.json";
 
 // Convert a date to a Unix timestamp
 function getUnixTimestamp(year, month, day) {
@@ -40,7 +40,10 @@ function extractContent(message) {
         block.elements.forEach((element) => {
           if (element.type === "rich_text_section") {
             element.elements.forEach((subElement) => {
-              if (subElement.type === "text" && subElement.text !== textContent) {
+              if (
+                subElement.type === "text" &&
+                subElement.text !== textContent
+              ) {
                 // Only add subElement.text if it's not already in textContent
                 if (!textContent.includes(subElement.text)) {
                   textContent += subElement.text;
@@ -65,7 +68,12 @@ function extractContent(message) {
 }
 
 async function fetchMessagesWithThreads(channel) {
+  // Create a write stream for the JSON file, clearing its content first
+  const stream = fs.createWriteStream(filePath, { flags: "w" });
+
   try {
+    stream.write("[\n"); // Start the JSON array
+
     const year = 2023;
     const month = 1;
     const day = 1;
@@ -77,6 +85,8 @@ async function fetchMessagesWithThreads(channel) {
       latest: timestamp,
       limit: 50,
     });
+
+    let isFirstMessage = true;
 
     const messages = result.messages;
 
@@ -102,14 +112,23 @@ async function fetchMessagesWithThreads(channel) {
           }
         }
 
-        problemMessages.push(extractedMessage);
+        if (!isFirstMessage) {
+          stream.write(",\n");
+        } else {
+          isFirstMessage = false;
+        }
+        stream.write(JSON.stringify(extractedMessage, null, 2));
       }
     }
 
-    saveProblemMessagesToFile(problemMessages);
+    stream.write("\n]\n"); // End the JSON array
   } catch (error) {
-    console.error(error);
+    console.error("An error occurred:", error);
+  } finally {
+    stream.end(); // Ensure the stream is closed, even if an error occurs
   }
+
+  console.log(`Problem messages saved to ${filePath}`);
 }
 
 async function isMessageAboutProblem(message) {
@@ -139,17 +158,6 @@ async function isMessageAboutProblem(message) {
     console.error("Error checking message with GPT:", error);
     return false;
   }
-}
-
-function saveProblemMessagesToFile(messages) {
-  const filePath = "problemMessages.json";
-  fs.writeFile(filePath, JSON.stringify(messages, null, 2), (err) => {
-    if (err) {
-      console.error("Error saving messages to file:", err);
-    } else {
-      console.log(`Problem messages saved to ${filePath}`);
-    }
-  });
 }
 
 fetchMessagesWithThreads(channelId);
