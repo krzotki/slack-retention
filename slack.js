@@ -1,9 +1,8 @@
 const { WebClient } = require("@slack/web-api");
-const { OpenAI } = require("openai");
-const { zodResponseFormat } = require("openai/helpers/zod");
 const { z } = require("zod");
 const dotenv = require("dotenv");
 const fs = require("fs");
+const axios = require("axios");
 
 dotenv.config({});
 
@@ -14,12 +13,8 @@ const GPTResponse = z.object({
 const slackToken = process.env.SLACK_TOKEN;
 const web = new WebClient(slackToken);
 const channelId = process.env.SLACK_CHANNEL;
-const openaiApiKey = process.env.OPEN_AI;
 
-const openai = new OpenAI({
-  apiKey: openaiApiKey,
-});
-
+const llamaApiUrl = "http://127.0.0.1:11434/api/chat";
 const filePath = "problemMessages.json";
 
 // Convert a date to a Unix timestamp
@@ -33,7 +28,6 @@ function extractContent(message) {
   const links = [];
   const attachments = message.attachments || [];
 
-  // Extract links and additional text content from blocks, avoiding duplication
   if (message.blocks) {
     message.blocks.forEach((block) => {
       if (block.type === "rich_text") {
@@ -44,7 +38,6 @@ function extractContent(message) {
                 subElement.type === "text" &&
                 subElement.text !== textContent
               ) {
-                // Only add subElement.text if it's not already in textContent
                 if (!textContent.includes(subElement.text)) {
                   textContent += subElement.text;
                 }
@@ -68,11 +61,10 @@ function extractContent(message) {
 }
 
 async function fetchMessagesWithThreads(channel) {
-  // Create a write stream for the JSON file, clearing its content first
   const stream = fs.createWriteStream(filePath, { flags: "w" });
 
   try {
-    stream.write("[\n"); // Start the JSON array
+    stream.write("[\n");
 
     const year = 2023;
     const month = 1;
@@ -83,11 +75,10 @@ async function fetchMessagesWithThreads(channel) {
     const result = await web.conversations.history({
       channel: channel,
       latest: timestamp,
-      limit: 50,
+      limit: 5,
     });
 
     let isFirstMessage = true;
-
     const messages = result.messages;
 
     for (const message of messages) {
@@ -121,11 +112,11 @@ async function fetchMessagesWithThreads(channel) {
       }
     }
 
-    stream.write("\n]\n"); // End the JSON array
+    stream.write("\n]\n");
   } catch (error) {
     console.error("An error occurred:", error);
   } finally {
-    stream.end(); // Ensure the stream is closed, even if an error occurs
+    stream.end();
   }
 
   console.log(`Problem messages saved to ${filePath}`);
@@ -133,29 +124,56 @@ async function fetchMessagesWithThreads(channel) {
 
 async function isMessageAboutProblem(message) {
   try {
-    const completion = await openai.beta.chat.completions.parse({
-      model: "gpt-4o-2024-08-06",
-      messages: [
-        {
-          role: "system",
-          content: `You are a helpful assistant that identifies whether a message is about a problem, issue or a question for guidance.
-            If the message is a pull request review request, then it is not a problem or issue.
-            `,
-        },
-        {
-          role: "user",
-          content: `Is the following message about a problem, issue or a question for guidance?\n\n"${message}"`,
-        },
-      ],
-      response_format: zodResponseFormat(GPTResponse, "response"),
-      temperature: 0,
+    const response = await axios({
+      method: "post",
+      url: llamaApiUrl,
+      data: {
+        model: "llama3.1",
+        messages: [
+          {
+            role: "system",
+            content: `You are a helpful assistant that identifies whether a message is about a problem, issue, or a question for guidance.
+              If the message is a pull request review request, then it is not a problem or issue. Your response should be in JSON format. 
+              It shoud have a SINGLE key "isProblem" with a boolean value.
+              Nothing else should be in the response.`,
+          },
+          {
+            role: "user",
+            content: `Is the following message about a problem, issue, or a question for guidance?\n\n"${message}"`,
+          },
+        ],
+      },
+      responseType: "stream",
     });
 
-    const isProblem = completion.choices[0].message.parsed.isProblem;
+    let responseData = "";
 
-    return isProblem;
+    // Listen to the data event to accumulate the streaming response
+    response.data.on("data", (chunk) => {
+      responseData += JSON.parse(chunk.toString()).message.content;
+    });
+
+    // Handle the end of the stream
+    return new Promise((resolve, reject) => {
+      response.data.on("end", () => {
+        try {
+          const parsedResponse = GPTResponse.parse(JSON.parse(responseData));
+          console.log({ parsedResponse });
+          resolve(parsedResponse.isProblem);
+        } catch (error) {
+          console.error("Error parsing streamed response:", error);
+          reject(false);
+        }
+      });
+
+      // Handle stream errors
+      response.data.on("error", (error) => {
+        console.error("Error during streaming:", error);
+        reject(false);
+      });
+    });
   } catch (error) {
-    console.error("Error checking message with GPT:", error);
+    console.error("Error checking message with Llama 3.1:", error);
     return false;
   }
 }
