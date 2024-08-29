@@ -147,7 +147,7 @@ async function isMessageAboutProblem(message) {
     });
 
     let responseData = "";
-
+    let start = Date.now();
     // Listen to the data event to accumulate the streaming response
     response.data.on("data", (chunk) => {
       responseData += JSON.parse(chunk.toString()).message.content;
@@ -158,7 +158,8 @@ async function isMessageAboutProblem(message) {
       response.data.on("end", () => {
         try {
           const parsedResponse = GPTResponse.parse(JSON.parse(responseData));
-          console.log({ parsedResponse });
+          console.log("Response:", parsedResponse);
+          console.log("Response time:", Date.now() - start);
           resolve(parsedResponse.isProblem);
         } catch (error) {
           console.error("Error parsing streamed response:", error);
